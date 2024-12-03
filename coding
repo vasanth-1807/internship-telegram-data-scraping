@@ -1,0 +1,208 @@
+import asyncio
+from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError
+import pandas as pd
+import nest_asyncio
+from google.colab import files
+import pandas as pd
+import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from textblob import TextBlob
+import re
+
+
+# Apply nest_asyncio patch
+nest_asyncio.apply()
+
+# Telegram credentials
+username = 'vasanthkarnan_07'  # Your Telegram account username (e.g., 'abc123')
+phone = '+918883184138'  # Your Telegram account phone number with country code
+api_id = 29484932  # Your API ID (from https://my.telegram.org/apps)
+api_hash = '33b795a1dd3613b304c7dd50e3fe1657'  # Your API Hash (from https://my.telegram.org/apps)
+
+# Initialize Telegram client
+client = TelegramClient('session_name', api_id, api_hash)
+
+async def list_channels():
+    """
+    List all channels and groups the user is part of.
+    """
+    async with client:
+        if not await client.is_user_authorized():
+            await client.send_code_request(phone)
+            await client.sign_in(phone, input('Enter the code sent to your Telegram: '))
+            try:
+                await client.sign_in(password=input('Enter your 2FA password (if applicable): '))
+            except SessionPasswordNeededError:
+                print("Two-factor authentication password needed.")
+                raise
+
+        print("\nFetching your channels and groups...\n")
+        dialogs = await client.get_dialogs()
+        for dialog in dialogs:
+            if dialog.is_channel:
+                print(f"Name: {dialog.name}, ID: {dialog.entity.id}")
+
+async def scrape_messages(channel_identifier):
+    """
+    Scrape messages from a public or private channel.
+
+    Args:
+        channel_identifier: The username (string) or ID (integer) of the channel.
+    """
+    async with client:
+        if not await client.is_user_authorized():
+            await client.send_code_request(phone)
+            await client.sign_in(phone, input('Enter the code sent to your Telegram: '))
+            try:
+                await client.sign_in(password=input('Enter your 2FA password (if applicable): '))
+            except SessionPasswordNeededError:
+                print("Two-factor authentication password needed.")
+                raise
+
+        print(f"Scraping messages from channel: {channel_identifier}...\n")
+        all_messages = []
+
+        # Fetch messages from the specified channel
+        async for message in client.iter_messages(channel_identifier, limit=100):  # Adjust limit as needed
+            all_messages.append({
+                'message_id': message.id,
+                'date': message.date,
+                'text': message.text or '',
+                'views': message.views if hasattr(message, 'views') else None,
+                'forwards': message.forwards if hasattr(message, 'forwards') else None,
+                'replies': message.replies.replies if message.replies else None,
+                'media': 'Yes' if message.media else 'No'
+            })
+
+        # Convert collected messages to a Pandas DataFrame
+        df = pd.DataFrame(all_messages)
+
+        # Convert the 'date' column to datetime format
+        df['date'] = pd.to_datetime(df['date'])
+
+        # Display basic info about scraped data
+        print("\nScraping complete. Here is a summary of the collected data:")
+        print(df.info())
+
+        # Save the data to a CSV file and download
+        output_file = 'telegram_scraped_data.csv'
+        df.to_csv(output_file, encoding='utf-8', index=False)
+        files.download(output_file)
+
+        print("\nScraped data successfully saved and downloaded.")
+
+# Main choice loop
+while True:
+    print("\n1. List all your channels/groups.")
+    print("2. Scrape messages from a channel.")
+    print("3. Exit.")
+    choice = input("Enter your choice (1, 2, or 3): ")
+
+    if choice == '1':
+        print("\nListing all your channels and groups...\n")
+        asyncio.get_event_loop().run_until_complete(list_channels())
+    elif choice == '2':
+        channel_identifier = input("Enter the username (without '@') or channel ID: ")
+        try:
+            # Convert to integer if it's a numeric ID
+            channel_identifier = int(channel_identifier)
+        except ValueError:
+            pass  # Keep as string if it's a username
+        asyncio.get_event_loop().run_until_complete(scrape_messages(channel_identifier))
+    elif choice == '3':
+        print("Exiting the program. Goodbye!")
+        break
+    else:
+        print("Invalid choice. Please try again.")
+
+# Load the data
+ # Replace with the path to your CSV file
+data = pd.read_csv("telegram_scraped_data (1).csv")
+
+# Display basic info about the dataset
+print("Original Data Info:")
+print(data.info())
+
+# 1. Data Cleaning
+print("\nCleaning the data...")
+
+# Drop rows with completely empty 'text'
+data.dropna(subset=['text'], inplace=True)
+
+# Remove duplicates
+data.drop_duplicates(subset=['message_id'], inplace=True)
+
+# Clean text: remove URLs, special characters, and extra spaces
+def clean_text(text):
+    text = re.sub(r'http\S+', '', text)  # Remove URLs
+    text = re.sub(r'[^A-Za-z0-9\s]', '', text)  # Remove special characters
+    text = re.sub(r'\s+', ' ', text).strip()  # Remove extra spaces
+    return text
+
+data['text'] = data['text'].apply(clean_text)
+
+# Convert 'date' to datetime
+data['date'] = pd.to_datetime(data['date'])
+
+print("\nCleaned Data Info:")
+print(data.info())
+
+# 2. Data Analysis
+print("\nAnalyzing the data...")
+
+# Message count
+message_count = data.shape[0]
+print(f"Total Messages: {message_count}")
+
+# Activity over time
+data['day'] = data['date'].dt.date
+daily_activity = data.groupby('day').size()
+
+# Word Frequency
+all_text = ' '.join(data['text'])
+wordcloud = WordCloud(width=800, height=400, background_color='white').generate(all_text)
+
+# Sentiment Analysis
+def analyze_sentiment(text):
+    analysis = TextBlob(text)
+    if analysis.sentiment.polarity > 0:
+        return 'Positive'
+    elif analysis.sentiment.polarity < 0:
+        return 'Negative'
+    else:
+        return 'Neutral'
+
+data['sentiment'] = data['text'].apply(analyze_sentiment)
+sentiment_counts = data['sentiment'].value_counts()
+
+# 3. Visualization
+print("\nGenerating visualizations...")
+
+# Plot daily activity
+plt.figure(figsize=(10, 5))
+daily_activity.plot(kind='bar', color='skyblue')
+plt.title("Messages Over Time")
+plt.xlabel("Date")
+plt.ylabel("Number of Messages")
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Plot word cloud
+plt.figure(figsize=(10, 5))
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.axis('off')
+plt.title("Word Cloud of Messages")
+plt.show()
+
+# Plot sentiment distribution
+plt.figure(figsize=(6, 4))
+sentiment_counts.plot(kind='bar', color=['green', 'red', 'blue'])
+plt.title("Sentiment Distribution")
+plt.xlabel("Sentiment")
+plt.ylabel("Count")
+plt.tight_layout()
+plt.show()
+
+
